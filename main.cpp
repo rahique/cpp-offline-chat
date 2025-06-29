@@ -1,144 +1,176 @@
 #include <iostream>
 #include <fstream>
 #include <string>
-#include <cstring>
-#include <chrono>
-#include <thread>
-#include <conio.h>  // for _kbhit(), _getch()
-#include <mutex>
+#include <vector>
+#include <algorithm>
+#include <cctype>
 
 using namespace std;
 
-mutex print_mutex;
-
-class ChatUser {
-    int userId;
-    char* buffer;
-    int bufferSize;
+class User {
+    string username;
+    string password;
 
 public:
-    ChatUser(int id) : userId(id), buffer(nullptr), bufferSize(0) {}
+    User(const string& u, const string& p) : username(u), password(p) {}
 
-    ~ChatUser() {
-        if (buffer) delete[] buffer;
-    }
-
-    void allocateBuffer(int size) {
-        if (buffer) delete[] buffer;
-        bufferSize = size;
-        buffer = new char[bufferSize];
-        memset(buffer, 0, bufferSize);
-    }
-
-    void sendMessage(const string& msg) {
-        ofstream fout("chat.txt", ios::app);
-        if (!fout) {
-            cerr << "Error opening file to send message.\n";
-            return;
-        }
-        fout << "User " << userId << ": " << msg << "\n";
-        fout.close();
-    }
-
-    void readMessages() {
-        ifstream fin("chat.txt");
-        if (!fin) {
-            cerr << "Error opening file to read messages.\n";
-            return;
-        }
-
-        fin.seekg(0, ios::end);
-        int length = fin.tellg();
-        fin.seekg(0, ios::beg);
-
-        allocateBuffer(length + 1);
-        fin.read(buffer, length);
-        buffer[length] = '\0';
-
-        fin.close();
-
-        lock_guard<mutex> lock(print_mutex);
-        system("cls");
-        cout << "---- Chat History ----\n";
-        cout << buffer << "\n";
-        cout << "----------------------\n";
-        cout << "Enter message (type 'exit' to quit): ";
-        cout.flush();
-    }
+    string getUsername() const { return username; }
+    string getPassword() const { return password; }
 };
 
-void refreshLoop(ChatUser* user, bool* running) {
-    while (*running) {
-        user->readMessages();
-        this_thread::sleep_for(chrono::seconds(5));
+vector<User> loadUsers() {
+    vector<User> users;
+    ifstream fin("users.txt");
+    if (!fin) return users;
+
+    string u, p;
+    while (fin >> u >> p) {
+        users.emplace_back(u, p);
     }
+    return users;
 }
 
-int main(int argc, char* argv[]) {
+void saveUser(const User& user) {
+    ofstream fout("users.txt", ios::app);
+    fout << user.getUsername() << " " << user.getPassword() << "\n";
+}
 
-    // Create the chat file if it does not exist yet
-    ofstream createFile("chat.txt", ios::app);
-    createFile.close();
+bool userExists(const vector<User>& users, const string& username) {
+    for (const auto& u : users)
+        if (u.getUsername() == username) return true;
+    return false;
+}
 
-    if (argc < 2) {
-        cout << "Usage: chat.exe <userId>\nExample: chat.exe 1\n";
-        return 1;
+bool validateLogin(const vector<User>& users, const string& username, const string& password) {
+    for (const auto& u : users)
+        if (u.getUsername() == username && u.getPassword() == password)
+            return true;
+    return false;
+}
+
+// Chat log filename: chat_user1_user2.txt (lex order)
+string getChatFilename(const string& u1, const string& u2) {
+    if (u1 < u2)
+        return "chat_" + u1 + "_" + u2 + ".txt";
+    else
+        return "chat_" + u2 + "_" + u1 + ".txt";
+}
+
+void showChat(const string& loggedInUser, const string& chatUser) {
+    string filename = getChatFilename(loggedInUser, chatUser);
+    ifstream fin(filename);
+    cout << "\n--- Chat with " << chatUser << " ---\n";
+    if (!fin) {
+        cout << "(No chat history)\n";
+    } else {
+        string line;
+        while (getline(fin, line)) {
+            cout << line << "\n";
+        }
     }
-    if (argc < 2) {
-        cout << "Usage: chat.exe <userId>\nExample: chat.exe 1\n";
-        return 1;
-    }
+    cout << "------------------------\n";
+}
 
-    int userId = atoi(argv[1]);
-    if (userId != 1 && userId != 2) {
-        cout << "User ID must be 1 or 2\n";
-        return 1;
-    }
+void appendMessage(const string& loggedInUser, const string& chatUser, const string& message) {
+    string filename = getChatFilename(loggedInUser, chatUser);
+    ofstream fout(filename, ios::app);
+    fout << loggedInUser << ": " << message << "\n";
+}
 
-    ChatUser user(userId);
-    bool running = true;
+int main() {
+    cout << "Welcome to Offline Chat!\n";
 
-    thread refresher(refreshLoop, &user, &running);
+    vector<User> users = loadUsers();
 
-    string input;
-    while (running) {
-        // Check if a key was pressed without blocking
-        if (_kbhit()) {
-            char ch = _getch();
+    while (true) {
+        cout << "\n1) Register\n2) Login\n3) Exit\nChoose: ";
+        int choice;
+        cin >> choice;
+        cin.ignore();
 
-            if (ch == '\r') { // Enter key pressed
-                if (!input.empty()) {
-                    if (input == "exit") {
-                        running = false;
-                        break;
+        if (choice == 1) {
+            string username, password;
+            cout << "Choose username: ";
+            getline(cin, username);
+            if (userExists(users, username)) {
+                cout << "Username taken. Try again.\n";
+                continue;
+            }
+            cout << "Choose password: ";
+            getline(cin, password);
+            users.emplace_back(username, password);
+            saveUser(users.back());
+            cout << "Registered! You can now login.\n";
+
+        } else if (choice == 2) {
+            string username, password;
+            cout << "Username: ";
+            getline(cin, username);
+            cout << "Password: ";
+            getline(cin, password);
+
+            if (!validateLogin(users, username, password)) {
+                cout << "Invalid credentials.\n";
+                continue;
+            }
+
+            cout << "Logged in as " << username << "\n";
+
+            // Chat session
+            while (true) {
+                cout << "\nUsers available to chat:\n";
+                int idx = 1;
+                vector<string> others;
+                for (const auto& u : users) {
+                    if (u.getUsername() != username) {
+                        cout << idx << ") " << u.getUsername() << "\n";
+                        others.push_back(u.getUsername());
+                        idx++;
                     }
-                    user.sendMessage(input);
-                    input.clear();
+                }
+                if (others.empty()) {
+                    cout << "(No other users registered yet)\n";
+                    break;
+                }
+                cout << idx << ") Logout\nChoose user to chat: ";
+                int chatChoice;
+                cin >> chatChoice;
+                cin.ignore();
+
+                if (chatChoice == idx) {
+                    cout << "Logging out...\n";
+                    break;
+                }
+
+                if (chatChoice < 1 || chatChoice >= idx) {
+                    cout << "Invalid choice.\n";
+                    continue;
+                }
+
+                string chatUser = others[chatChoice - 1];
+
+                // Chat loop
+                while (true) {
+                    showChat(username, chatUser);
+
+                    cout << "Enter message (type '/exit' to back): ";
+                    string msg;
+                    getline(cin, msg);
+                    if (msg == "/exit") break;
+
+                    if (!msg.empty()) {
+                        appendMessage(username, chatUser, msg);
+                    }
                 }
             }
-            else if (ch == 8) { // Backspace
-                if (!input.empty()) {
-                    input.pop_back();
-                    lock_guard<mutex> lock(print_mutex);
-                    cout << "\b \b";
-                    cout.flush();
-                }
-            }
-            else {
-                input.push_back(ch);
-                lock_guard<mutex> lock(print_mutex);
-                cout << ch;
-                cout.flush();
-            }
-        }
-        else {
-            // Sleep a bit to reduce CPU usage
-            this_thread::sleep_for(chrono::milliseconds(50));
+
+        } else if (choice == 3) {
+            cout << "Goodbye!\n";
+            break;
+        } else {
+            cout << "Invalid option.\n";
         }
     }
 
-    refresher.join();
-
-    cout << "\nUser " << userId << " exited chat.\n";
     return 0;
 }
